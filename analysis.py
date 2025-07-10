@@ -34,4 +34,40 @@ print(df.isnull().sum())
 
 
 
+# Convert release_date to datetime and extract year
+df['year'] = pd.to_datetime(df['release_date']).dt.year
+
+# Drop release_date column
+df = df.drop(columns=['release_date'])
+
+# Extract first genre from genres (JSON-like string)
+import json
+def get_first_genre(genre_str):
+    genres = json.loads(genre_str)
+    return genres[0]['name'] if genres else 'Unknown'
+
+df['main_genre'] = df['genres'].apply(get_first_genre)
+
+# Drop genres column
+df = df.drop(columns=['genres'])
+
+# Print first 5 rows of cleaned columns
+print(df[['title', 'budget', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']].head())
+
+# Select final columns for modeling
+final_columns = ['title', 'budget', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']
+df_clean = df[final_columns]
+
+# Check for outliers in budget and revenue
+print("Budget stats:")
+print(df_clean['budget'].describe())
+print("\nRevenue stats:")
+print(df_clean['revenue'].describe())
+
+# Save cleaned dataframe to CSV
+df_clean.to_csv('cleaned_movies.csv', index=False)
+
+# Print final shape
+print("Final cleaned shape:", df_clean.shape)
+
 
