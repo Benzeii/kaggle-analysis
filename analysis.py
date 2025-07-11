@@ -71,7 +71,6 @@ df_clean = df_clean[(df_clean['budget'] >= 1000) & (df_clean['revenue'] >= 1000)
 print("Shape after outlier removal:", df_clean.shape)
 
 # Import Scikit-learn for modeling and scaling
-from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
@@ -98,8 +97,8 @@ scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)  # Use the same scaler for test
 
-# Train Random Forest model with increased trees
-model = RandomForestRegressor(n_estimators=200, random_state=42)
+# Train Random Forest model with tuned parameters
+model = RandomForestRegressor(n_estimators=200, max_depth=40, min_samples_leaf=5, random_state=42)
 model.fit(X_train_scaled, y_train)
 
 # Predict on test set
@@ -107,7 +106,7 @@ y_pred_log = model.predict(X_test_scaled)
 
 # Reverse log transformation with adjusted clipping
 y_pred_original = np.expm1(y_pred_log)
-y_pred_original = np.clip(y_pred_original, 1000, 1e10)  # Relaxed upper bound to 10 billion
+y_pred_original = np.clip(y_pred_original, 1000, 5e10)  # Relaxed upper bound to 50 billion
 y_test_original = np.expm1(y_test)
 
 # Calculate mean squared error
