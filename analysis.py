@@ -3,9 +3,6 @@ import numpy
 import sklearn
 import sqlite3
 
-df = pd.read_csv('tmdb_5000_movies.csv')
-
-
 # Load the CSV file
 df = pd.read_csv('tmdb_5000_movies.csv')
 
@@ -17,7 +14,6 @@ print(df.isnull().sum())
 
 # Print data types of columns
 print(df.dtypes)
-
 
 # Remove rows with missing release_date
 df = df.dropna(subset=['release_date'])
@@ -31,8 +27,6 @@ df = df[(df['budget'] > 0) & (df['revenue'] > 0)]
 # Print new shape and missing values
 print("Shape after cleaning:", df.shape)
 print(df.isnull().sum())
-
-
 
 # Convert release_date to datetime and extract year
 df['year'] = pd.to_datetime(df['release_date']).dt.year
@@ -76,43 +70,68 @@ df_clean = df_clean[(df_clean['budget'] >= 1000) & (df_clean['revenue'] >= 1000)
 # Print new shape after outlier removal
 print("Shape after outlier removal:", df_clean.shape)
 
-# Import Scikit-learn for modeling
+# Import Scikit-learn for modeling and scaling
 from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+from sklearn.preprocessing import OneHotEncoder
 
-# Prepare features (X) and target (y)
-X = df_clean[['budget', 'runtime', 'vote_average', 'year']]
-y = df_clean['revenue']
+# Prepare features (X) and target (y), keep title for reference
+X = df_clean[['budget', 'runtime', 'vote_average', 'year', 'main_genre']]
+y = np.log1p(df_clean['revenue'])  # Log transform revenue
+titles = df_clean['title']  # Store titles
 
-# Split data into training and test sets (80% train, 20% test)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+# One-hot encode main_genre
+encoder = OneHotEncoder(sparse_output=False, drop='first')  # Drop first to avoid multicollinearity
+genre_encoded = encoder.fit_transform(X[['main_genre']])
+genre_columns = encoder.get_feature_names_out(['main_genre'])
+X_encoded = np.hstack((X[['budget', 'runtime', 'vote_average', 'year']].values, genre_encoded))
 
-# Train linear regression model
-model = LinearRegression()
-model.fit(X_train, y_train)
+# Split data into training and test sets (80% train, 20% test) before scaling
+X_train, X_test, y_train, y_test, titles_train, titles_test = train_test_split(X_encoded, y, titles, test_size=0.2, random_state=42)
+
+# Scale features separately for train and test
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)  # Use the same scaler for test
+
+# Train Random Forest model with increased trees
+model = RandomForestRegressor(n_estimators=200, random_state=42)
+model.fit(X_train_scaled, y_train)
 
 # Predict on test set
-y_pred = model.predict(X_test)
+y_pred_log = model.predict(X_test_scaled)
+
+# Reverse log transformation with adjusted clipping
+y_pred_original = np.expm1(y_pred_log)
+y_pred_original = np.clip(y_pred_original, 1000, 1e10)  # Relaxed upper bound to 10 billion
+y_test_original = np.expm1(y_test)
 
 # Calculate mean squared error
-mse = mean_squared_error(y_test, y_pred)
-print("Mean Squared Error:", mse)
+mse_log = mean_squared_error(y_test, y_pred_log)
+mse_original = mean_squared_error(y_test_original, y_pred_original)
+print("Mean Squared Error (log scale):", mse_log)
+print("Mean Squared Error (original scale):", mse_original)
 
-# Save predictions to dataframe
-df_test = X_test.copy()
-df_test['actual_revenue'] = y_test
-df_test['predicted_revenue'] = y_pred
+# Save predictions to dataframe with titles
+df_test = pd.DataFrame(X_test_scaled, columns=['budget', 'runtime', 'vote_average', 'year'] + list(genre_columns))
+df_test['title'] = titles_test.reset_index(drop=True)
+df_test['actual_revenue'] = y_test_original.reset_index(drop=True)
+df_test['predicted_revenue'] = y_pred_original
 df_test.to_csv('predictions.csv', index=False)
 
+# Optional: Print some predictions for sanity check
+print("Sample predictions:")
+print(df_test[['title', 'actual_revenue', 'predicted_revenue']].head())
 
-import sqlite3
-
-# Connect to SQLite database
+# SQLite setup with single connection
 conn = sqlite3.connect('movies.db')
 cursor = conn.cursor()
 
-# Create movies table
+# Create movies table with updated columns
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS movies (
         title TEXT,
@@ -121,17 +140,38 @@ cursor.execute('''
         runtime REAL,
         vote_average REAL,
         year INTEGER,
-        main_genre TEXT
+        main_genre TEXT,
+        predicted_revenue REAL
     )
 ''')
 
 # Load cleaned_movies.csv and insert into table
 df_clean.to_sql('movies', conn, if_exists='replace', index=False)
 
-# Verify data
-cursor.execute('SELECT * FROM movies LIMIT 5')
+# Check if predicted_revenue column exists, add if not
+cursor.execute('PRAGMA table_info(movies)')
+columns = [col[1] for col in cursor.fetchall()]
+if 'predicted_revenue' not in columns:
+    cursor.execute('ALTER TABLE movies ADD COLUMN predicted_revenue REAL')
+
+# Load predictions.csv for update and verify
+df_pred = pd.read_csv('predictions.csv')
+print("Predictions CSV sample:")
+print(df_pred[['title', 'predicted_revenue']].head())  # Verify saved predictions
+
+# Merge predictions with test subset
+df_test_subset = df_clean[df_clean['title'].isin(df_pred['title'])].copy()
+df_merged = pd.merge(df_test_subset, df_pred[['title', 'predicted_revenue']], on='title', how='left')
+
+# Update SQLite table with merged predictions
+for idx, row in df_merged.iterrows():
+    if pd.notna(row['predicted_revenue']):  # Only update if prediction exists
+        cursor.execute('UPDATE movies SET predicted_revenue = ? WHERE title = ?', (row['predicted_revenue'], row['title']))
+
+# Verify
+cursor.execute('SELECT title, revenue, predicted_revenue FROM movies WHERE predicted_revenue IS NOT NULL LIMIT 5')
 rows = cursor.fetchall()
-print("First 5 rows in SQLite table:")
+print("Updated rows with predictions:")
 for row in rows:
     print(row)
 
