@@ -104,3 +104,37 @@ df_test = X_test.copy()
 df_test['actual_revenue'] = y_test
 df_test['predicted_revenue'] = y_pred
 df_test.to_csv('predictions.csv', index=False)
+
+
+import sqlite3
+
+# Connect to SQLite database
+conn = sqlite3.connect('movies.db')
+cursor = conn.cursor()
+
+# Create movies table
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS movies (
+        title TEXT,
+        budget REAL,
+        revenue REAL,
+        runtime REAL,
+        vote_average REAL,
+        year INTEGER,
+        main_genre TEXT
+    )
+''')
+
+# Load cleaned_movies.csv and insert into table
+df_clean.to_sql('movies', conn, if_exists='replace', index=False)
+
+# Verify data
+cursor.execute('SELECT * FROM movies LIMIT 5')
+rows = cursor.fetchall()
+print("First 5 rows in SQLite table:")
+for row in rows:
+    print(row)
+
+# Close connection
+conn.commit()
+conn.close()
