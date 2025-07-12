@@ -2,6 +2,11 @@ import pandas as pd
 import numpy
 import sklearn
 import sqlite3
+from datetime import datetime
+import time
+
+# Debug: Confirm code version
+print("Running code updated at 05:30 AM BST, July 12, 2025")
 
 # Load the CSV file
 df = pd.read_csv('tmdb_5000_movies.csv')
@@ -45,16 +50,21 @@ df['main_genre'] = df['genres'].apply(get_first_genre)
 # Drop genres column
 df = df.drop(columns=['genres'])
 
-# Print first 5 rows of cleaned columns
-print(df[['title', 'budget', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']].head())
+# Add budget squared as a feature
+df['budget_squared'] = df['budget'] ** 2
+
+# Print first 5 rows of cleaned columns with new feature
+print(df[['title', 'budget', 'budget_squared', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']].head())
 
 # Select final columns for modeling
-final_columns = ['title', 'budget', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']
+final_columns = ['title', 'budget', 'budget_squared', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']
 df_clean = df[final_columns]
 
 # Check for outliers in budget and revenue
 print("Budget stats:")
 print(df_clean['budget'].describe())
+print("\nBudget squared stats:")
+print(df_clean['budget_squared'].describe())
 print("\nRevenue stats:")
 print(df_clean['revenue'].describe())
 
@@ -71,7 +81,7 @@ df_clean = df_clean[(df_clean['budget'] >= 1000) & (df_clean['revenue'] >= 1000)
 print("Shape after outlier removal:", df_clean.shape)
 
 # Import Scikit-learn for modeling and scaling
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
@@ -79,7 +89,7 @@ import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 
 # Prepare features (X) and target (y), keep title for reference
-X = df_clean[['budget', 'runtime', 'vote_average', 'year', 'main_genre']]
+X = df_clean[['budget', 'budget_squared', 'runtime', 'vote_average', 'year', 'main_genre']]
 y = np.log1p(df_clean['revenue'])  # Log transform revenue
 titles = df_clean['title']  # Store titles
 
@@ -87,26 +97,40 @@ titles = df_clean['title']  # Store titles
 encoder = OneHotEncoder(sparse_output=False, drop='first')  # Drop first to avoid multicollinearity
 genre_encoded = encoder.fit_transform(X[['main_genre']])
 genre_columns = encoder.get_feature_names_out(['main_genre'])
-X_encoded = np.hstack((X[['budget', 'runtime', 'vote_average', 'year']].values, genre_encoded))
 
-# Split data into training and test sets (80% train, 20% test) before scaling
-X_train, X_test, y_train, y_test, titles_train, titles_test = train_test_split(X_encoded, y, titles, test_size=0.2, random_state=42)
+# Prepare X_encoded with numerical features only for scaling
+X_numeric = X[['budget', 'budget_squared', 'runtime', 'vote_average', 'year']].values
+X_encoded_numeric = np.hstack((X_numeric, genre_encoded))
 
-# Scale features separately for train and test
+# Scale features with StandardScaler
 scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train)
-X_test_scaled = scaler.transform(X_test)  # Use the same scaler for test
+X_train_numeric, X_test_numeric, y_train, y_test, titles_train, titles_test = train_test_split(X_numeric, y, titles, test_size=0.2, random_state=42)
+X_train_scaled = scaler.fit_transform(X_train_numeric)
+X_test_scaled_numeric = scaler.transform(X_test_numeric)
 
-# Train Random Forest model with tuned parameters
-model = RandomForestRegressor(n_estimators=200, max_depth=40, min_samples_leaf=5, random_state=42)
+# Combine scaled numeric features with one-hot encoded genres
+X_train_scaled = np.hstack((X_train_scaled, encoder.transform(X.loc[titles_train.index][['main_genre']])))
+X_test_scaled = np.hstack((X_test_scaled_numeric, encoder.transform(X.loc[titles_test.index][['main_genre']])))
+
+# Train Gradient Boosting model with tuned parameters
+model = GradientBoostingRegressor(n_estimators=200, max_depth=30, learning_rate=0.1, min_samples_leaf=2, min_samples_split=10, random_state=42)
+print("Model parameters:", model.get_params())  # Debug: Verify parameters
+start_time = time.time()
 model.fit(X_train_scaled, y_train)
+print(f"Training completed in {time.time() - start_time:.2f} seconds")
 
 # Predict on test set
 y_pred_log = model.predict(X_test_scaled)
 
+# Debug: Check raw predictions
+print(f"Raw log predictions range: {np.min(y_pred_log):.4f} to {np.max(y_pred_log):.4f}")
+print(f"Top 5 log predictions: {sorted(y_pred_log, reverse=True)[:5]}")  # Check highest values
+
 # Reverse log transformation with adjusted clipping
 y_pred_original = np.expm1(y_pred_log)
-y_pred_original = np.clip(y_pred_original, 1000, 5e10)  # Relaxed upper bound to 50 billion
+print(f"Max predicted value before clipping: {np.max(y_pred_original):.2e}")
+y_pred_original = np.clip(y_pred_original, 1000, 5e10)  # Explicitly set to 50 billion
+print(f"Max predicted value after clipping: {np.max(y_pred_original):.2e}")
 y_test_original = np.expm1(y_test)
 
 # Calculate mean squared error
@@ -116,7 +140,7 @@ print("Mean Squared Error (log scale):", mse_log)
 print("Mean Squared Error (original scale):", mse_original)
 
 # Save predictions to dataframe with titles
-df_test = pd.DataFrame(X_test_scaled, columns=['budget', 'runtime', 'vote_average', 'year'] + list(genre_columns))
+df_test = pd.DataFrame(X_test_scaled, columns=['budget', 'budget_squared', 'runtime', 'vote_average', 'year'] + list(genre_columns))
 df_test['title'] = titles_test.reset_index(drop=True)
 df_test['actual_revenue'] = y_test_original.reset_index(drop=True)
 df_test['predicted_revenue'] = y_pred_original
