@@ -6,7 +6,7 @@ from datetime import datetime
 import time
 
 # Debug: Confirm code version
-print("Running code updated at 05:30 AM BST, July 12, 2025")
+print("Running code updated at 07:45 AM BST, July 12, 2025")
 
 # Load the CSV file
 df = pd.read_csv('tmdb_5000_movies.csv')
@@ -50,14 +50,15 @@ df['main_genre'] = df['genres'].apply(get_first_genre)
 # Drop genres column
 df = df.drop(columns=['genres'])
 
-# Add budget squared as a feature
+# Add budget squared and vote_count as features
 df['budget_squared'] = df['budget'] ** 2
+df['vote_count'] = df['vote_count']  # Include vote_count as a feature
 
-# Print first 5 rows of cleaned columns with new feature
-print(df[['title', 'budget', 'budget_squared', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']].head())
+# Print first 5 rows of cleaned columns with new features
+print(df[['title', 'budget', 'budget_squared', 'vote_count', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']].head())
 
 # Select final columns for modeling
-final_columns = ['title', 'budget', 'budget_squared', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']
+final_columns = ['title', 'budget', 'budget_squared', 'vote_count', 'revenue', 'runtime', 'vote_average', 'year', 'main_genre']
 df_clean = df[final_columns]
 
 # Check for outliers in budget and revenue
@@ -65,6 +66,8 @@ print("Budget stats:")
 print(df_clean['budget'].describe())
 print("\nBudget squared stats:")
 print(df_clean['budget_squared'].describe())
+print("\nVote count stats:")
+print(df_clean['vote_count'].describe())
 print("\nRevenue stats:")
 print(df_clean['revenue'].describe())
 
@@ -89,7 +92,7 @@ import numpy as np
 from sklearn.preprocessing import OneHotEncoder
 
 # Prepare features (X) and target (y), keep title for reference
-X = df_clean[['budget', 'budget_squared', 'runtime', 'vote_average', 'year', 'main_genre']]
+X = df_clean[['budget', 'budget_squared', 'vote_count', 'runtime', 'vote_average', 'year', 'main_genre']]
 y = np.log1p(df_clean['revenue'])  # Log transform revenue
 titles = df_clean['title']  # Store titles
 
@@ -99,7 +102,7 @@ genre_encoded = encoder.fit_transform(X[['main_genre']])
 genre_columns = encoder.get_feature_names_out(['main_genre'])
 
 # Prepare X_encoded with numerical features only for scaling
-X_numeric = X[['budget', 'budget_squared', 'runtime', 'vote_average', 'year']].values
+X_numeric = X[['budget', 'budget_squared', 'vote_count', 'runtime', 'vote_average', 'year']].values
 X_encoded_numeric = np.hstack((X_numeric, genre_encoded))
 
 # Scale features with StandardScaler
@@ -113,7 +116,7 @@ X_train_scaled = np.hstack((X_train_scaled, encoder.transform(X.loc[titles_train
 X_test_scaled = np.hstack((X_test_scaled_numeric, encoder.transform(X.loc[titles_test.index][['main_genre']])))
 
 # Train Gradient Boosting model with tuned parameters
-model = GradientBoostingRegressor(n_estimators=200, max_depth=30, learning_rate=0.1, min_samples_leaf=2, min_samples_split=10, random_state=42)
+model = GradientBoostingRegressor(n_estimators=200, max_depth=80, learning_rate=0.05, min_samples_leaf=2, min_samples_split=5, random_state=42)
 print("Model parameters:", model.get_params())  # Debug: Verify parameters
 start_time = time.time()
 model.fit(X_train_scaled, y_train)
@@ -140,7 +143,7 @@ print("Mean Squared Error (log scale):", mse_log)
 print("Mean Squared Error (original scale):", mse_original)
 
 # Save predictions to dataframe with titles
-df_test = pd.DataFrame(X_test_scaled, columns=['budget', 'budget_squared', 'runtime', 'vote_average', 'year'] + list(genre_columns))
+df_test = pd.DataFrame(X_test_scaled, columns=['budget', 'budget_squared', 'vote_count', 'runtime', 'vote_average', 'year'] + list(genre_columns))
 df_test['title'] = titles_test.reset_index(drop=True)
 df_test['actual_revenue'] = y_test_original.reset_index(drop=True)
 df_test['predicted_revenue'] = y_pred_original
